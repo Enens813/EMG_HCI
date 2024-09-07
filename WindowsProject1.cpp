@@ -1,4 +1,4 @@
-﻿#include <iostream>
+#include <iostream>
 #include <iomanip>
 #include <sstream>
 #include <thread>
@@ -56,8 +56,11 @@ uint64_t StringToBluetoothAddress(const std::wstring& address) {
 std::deque<std::pair<int, int>> kalHistory; // To store the last 10 kal[0] and kal[1] values
 
 void HandleNotification(GattCharacteristic characteristic, GattValueChangedEventArgs args) {
-    // static int preKal0 = 0;
-    // static int preKal1 = 0;
+    static float filteredKal0 = 0.0f; // Low-pass filtered kal[0]
+    static float filteredKal1 = 0.0f; // Low-pass filtered kal[1]
+    static float previousKal0 = 0.0f; // Previous kal[0] value
+    static float previousKal1 = 0.0f; // Previous kal[1] value
+    const float alpha = 0.1f;         // Low-pass filter constant (0 < alpha < 1, smaller = smoother)
 
     try {
         auto reader = DataReader::FromBuffer(args.CharacteristicValue());
@@ -75,19 +78,16 @@ void HandleNotification(GattCharacteristic characteristic, GattValueChangedEvent
             memcpy(kal, raw_data.data() + 16, 8);
             std::wcout << timestamp << "\t" << emgValues[0] << "\t" << emgValues[1] << "\t" << emgValues[2] << "\t" << kal[0] << "\t" << kal[1] << "\t" << std::endl;
 
-            // for stabilize
-            // Store the current kal values in the history deque
+            // Kal history to stabilize movement (same as before)
             if (kalHistory.size() >= 5) {
-                kalHistory.pop_front(); // Remove the oldest entry if we already have 10 values
+                kalHistory.pop_front(); // Remove the oldest entry
             }
             kalHistory.push_back(std::make_pair(kal[0], kal[1]));
 
-            // Calculate weighted average for kal[0] and kal[1] based on the last 10 values
             const std::vector<float> weights = { 0.1f, 0.15f, 0.2f, 0.25f, 0.3f }; // Weights for averaging
             float weightedKal0 = 0.0f, weightedKal1 = 0.0f;
             float totalWeight = 0.0f;
 
-            // Apply weights
             int size = kalHistory.size();
             for (int i = 0; i < size; ++i) {
                 float weight = weights[i % weights.size()];
@@ -95,22 +95,35 @@ void HandleNotification(GattCharacteristic characteristic, GattValueChangedEvent
                 weightedKal1 += kalHistory[i].second * weight;
                 totalWeight += weight;
             }
-
-            // Normalize the result
             weightedKal0 /= totalWeight;
             weightedKal1 /= totalWeight;
 
-            // Move the mouse based on kal values
-            INPUT input = { 0 };
-            input.type = INPUT_MOUSE;
-            input.mi.dx = static_cast<LONG>(weightedKal0 * 20);  // Adjust sensitivity
-            input.mi.dy = static_cast<LONG>(-weightedKal1 * 40); // Adjust sensitivity
-            input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
-            SendInput(1, &input, sizeof(INPUT));
+            // Apply low-pass filter to smooth the movement
+            filteredKal0 = alpha * weightedKal0 + (1 - alpha) * filteredKal0;
+            filteredKal1 = alpha * weightedKal1 + (1 - alpha) * filteredKal1;
 
-            // Check if any emgValue is greater than 2000 to trigger a mouse click
+            // Calculate the difference between the current and the previous frame
+            float deltaKal0 = std::abs(filteredKal0 - previousKal0);
+            float deltaKal1 = std::abs(filteredKal1 - previousKal1);
+
+            // Movement threshold: Only move if the difference with the previous frame exceeds a certain threshold
+            const float threshold = 5.0f; // Threshold for movement
+            if (deltaKal0 > threshold || deltaKal1 > threshold) {
+                INPUT input = { 0 };
+                input.type = INPUT_MOUSE;
+                input.mi.dx = static_cast<LONG>((filteredKal0 + 1600) * 15);  // Adjust sensitivity
+                input.mi.dy = static_cast<LONG>((-filteredKal1 + 800) * 30);  // Adjust sensitivity
+                input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+                SendInput(1, &input, sizeof(INPUT));
+
+                // Update previous Kal values to the current frame
+                previousKal0 = filteredKal0;
+                previousKal1 = filteredKal1;
+            }
+
+            // EMG value for triggering mouse click
             auto now = std::chrono::steady_clock::now();
-            if ((emgValues[0] > 1900 ||  emgValues[2] > 1900) &&
+            if ((emgValues[0] > 19000 || emgValues[2] > 19000) &&
                 (now - lastClickTime >= std::chrono::seconds(1))) {
                 INPUT clickInput = { 0 };
                 clickInput.type = INPUT_MOUSE;
@@ -120,7 +133,7 @@ void HandleNotification(GattCharacteristic characteristic, GattValueChangedEvent
                 clickInput.mi.dwFlags = MOUSEEVENTF_LEFTUP;
                 SendInput(1, &clickInput, sizeof(INPUT));
 
-                // Second click (for double click)
+                // Optional: Second click (for double-click)
                 clickInput.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
                 SendInput(1, &clickInput, sizeof(INPUT));
 
@@ -141,6 +154,7 @@ void HandleNotification(GattCharacteristic characteristic, GattValueChangedEvent
         std::wcerr << L"Unknown exception occurred." << std::endl;
     }
 }
+
 
 void ReadBLEData(BluetoothLEDevice device) {
     try {

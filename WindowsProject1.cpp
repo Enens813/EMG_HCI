@@ -250,14 +250,18 @@ int main() {
         watcher.Received(OnAdvertisementReceived);
         watcher.ScanningMode(BluetoothLEScanningMode::Active);
 
-        std::wcout << L"Starting BLE scan..." << std::endl;
-        watcher.Start();
-        std::this_thread::sleep_for(std::chrono::seconds(5));
-        watcher.Stop();
-
-        std::wcout << L"Type 'start' to begin reading BLE data: ";
         std::wstring input;
-        std::wcin >> input;
+        do {
+            std::wcout << L"Starting BLE scan..." << std::endl;
+            watcher.Start();
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            watcher.Stop();
+
+            if (global_device == nullptr)   std::wcout << L"Couldn't find target device. Want to scan again? [y/n] ";
+            else                            std::wcout << L"Type 'start' to begin reading BLE data: ";
+            std::wcin >> input;
+
+        } while (input == L"y" | input == L"yes");
 
         if (input == L"start") {
             std::wcout << L"Starting BLE data read" << std::endl;

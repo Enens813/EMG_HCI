@@ -45,7 +45,7 @@ uint64_t StringToBluetoothAddress(const std::wstring& address) {
     int shift = 40;
     for (size_t i = 0; i < address.length(); ++i) {
         if (address[i] != L':') {
-            btAddr += std::stoul(address.substr(i, 2), nullptr, 16) << shift;
+            btAddr += static_cast<uint64_t>(std::stoul(address.substr(i, 2), nullptr, 16)) << shift;
             shift -= 8;
             i++;
         }

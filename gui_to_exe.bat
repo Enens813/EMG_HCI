@@ -1,3 +1,3 @@
 @echo off
-pyinstaller --onefile --windowed your_script.py
+pyinstaller --onefile --windowed gui.py
 pause

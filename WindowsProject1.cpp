@@ -23,8 +23,9 @@ using namespace Windows::Devices::Bluetooth::GenericAttributeProfile;
 using namespace Windows::Storage::Streams;
 using namespace Windows::Devices::Bluetooth::Advertisement;
 
-bool running = false;
+bool running = true; // originally false
 const GUID characteristic_uuid = { 0xbeb5483e, 0x36e1, 0x4688, { 0xb7, 0xf5, 0xea, 0x07, 0x36, 0x1b, 0x26, 0xa8 } };
+const int window = 30;
 std::mutex device_mutex;
 BluetoothLEDevice global_device = nullptr;
 std::chrono::steady_clock::time_point lastClickTime = std::chrono::steady_clock::now() - std::chrono::seconds(1);
@@ -86,8 +87,8 @@ void HandleNotification(GattCharacteristic characteristic, GattValueChangedEvent
                 std::lock_guard<std::mutex> lock(queue_mutex);
                 emgDataQueue.push_back(emg_input);
             }
-            // 새 데이터가 들어왔음을 알림
-            data_condition.notify_one();
+            // 30 데이터가 들어왔음을 알림
+            if (emgDataQueue.size() == 3 * window) data_condition.notify_one();
 
 
             // for stabilize
@@ -125,7 +126,7 @@ void HandleNotification(GattCharacteristic characteristic, GattValueChangedEvent
 
             // Check if any emgValue is greater than 2000 to trigger a mouse click
             auto now = std::chrono::steady_clock::now();
-            if ((emgValues[0] > 1900 ||  emgValues[2] > 1900) &&
+            if ((emgValues[0] > 1900 || emgValues[2] > 1900) &&
                 (now - lastClickTime >= std::chrono::seconds(1))) {
                 INPUT clickInput = { 0 };
                 clickInput.type = INPUT_MOUSE;
@@ -254,7 +255,11 @@ std::vector<float> predictWithONNX(Ort::Session& session, const Ort::MemoryInfo&
     );
 
     // 입력 및 출력 이름 설정
-    std::vector<const char*> input_names = { "input" };  // ONNX 모델에서 입력 노드의 이름
+    std::vector<const char*> input_names;                   // ONNX 모델에서 입력 노드의 이름
+    for (int i = 1; i <= 3 * window; ++i) {                   // 'emgdata1'부터 'emgdata90'까지의 값을 벡터에 추가
+        std::string name = "emgdata" + std::to_string(i);
+        input_names.push_back(name.c_str());
+    }
     std::vector<const char*> output_names = { "output" };  // ONNX 모델에서 출력 노드의 이름
 
     // 추론 실행
@@ -267,13 +272,17 @@ std::vector<float> predictWithONNX(Ort::Session& session, const Ort::MemoryInfo&
 
 
 void predictThread(Ort::Session& session, const Ort::MemoryInfo& memory_info) {
+    std::wcout << "function called" << std::endl;
+
     while (running) {
         std::vector<float> emg_input;
 
         // 데이터를 대기하고 가져오기
         {
             std::unique_lock<std::mutex> lock(queue_mutex);
-            data_condition.wait(lock, [] { return !emgDataQueue.empty() || !running; });
+            data_condition.wait(lock); // , [] { return !emgDataQueue.empty() || !running; }
+            // this thread wait until 1.data_condition is notified via 'notify_one' or 'notify_all', 2.lambda fcn on 2nd argument returns true
+            // lock(std::unique_lock): 
 
             if (!running && emgDataQueue.empty())
                 break;
@@ -285,7 +294,10 @@ void predictThread(Ort::Session& session, const Ort::MemoryInfo& memory_info) {
         // 예측 수행
         std::vector<float> result = predictWithONNX(session, memory_info, emg_input);
         std::wcout << L"Predicted Label: " << result[0] << std::endl;
+
+
     }
+    std::wcout << "function ended" << std::endl;
 }
 
 
@@ -312,6 +324,23 @@ int main() {
 
         } while (input == L"y" | input == L"yes");
 
+        /*
+        if (input == L"debug") {
+            std::wcout << "debug started" << std::endl;
+            // ONNX Runtime 환경 설정
+            Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "test");
+            Ort::SessionOptions session_options;
+            // ONNX 모델 로드, Allocator 및 메모리 정보 설정
+            Ort::Session session(env, L"random_forest_model.onnx", session_options);
+            Ort::AllocatorWithDefaultOptions allocator;
+            Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+
+            // Start the prediction thread
+            std::thread prediction_thread(predictThread, std::ref(session), std::ref(memory_info));
+            prediction_thread.join();
+            std::wcout << "debug ended" << std::endl;
+        }
+        */
 
         if (input == L"start") {
             std::wcout << L"Starting BLE data read" << std::endl;
@@ -331,6 +360,7 @@ int main() {
             if (global_device != nullptr) {
                 std::thread ble_thread(ReadBLEData, global_device);
                 ble_thread.join();
+                prediction_thread.join();
                 std::wcout << L"Finished BLE data read" << std::endl;
             }
             else {

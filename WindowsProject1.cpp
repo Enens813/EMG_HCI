@@ -162,16 +162,6 @@ void HandleNotification(GattCharacteristic        characteristic,
                 previousKal1 = filteredKal1;
             }
 
-            // Move the mouse based on kal values
-            INPUT input = {0};
-            input.type  = INPUT_MOUSE;
-            input.mi.dx =
-                static_cast<LONG>(weightedKal0 * 20); // Adjust sensitivity
-            input.mi.dy =
-                static_cast<LONG>(-weightedKal1 * 40); // Adjust sensitivity
-            input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
-            SendInput(1, &input, sizeof(INPUT));
-
             // Check if any emgValue is greater than 2000 to trigger a mouse
             // click
             auto now = std::chrono::steady_clock::now();

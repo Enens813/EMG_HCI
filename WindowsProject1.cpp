@@ -69,6 +69,12 @@ std::deque<std::pair<int, int>>
 
 void HandleNotification(GattCharacteristic        characteristic,
                         GattValueChangedEventArgs args) {
+    static float filteredKal0 = 0.0f; // Low-pass filtered kal[0]
+    static float filteredKal1 = 0.0f; // Low-pass filtered kal[1]
+    static float previousKal0 = 0.0f; // Previous kal[0] value
+    static float previousKal1 = 0.0f; // Previous kal[1] value
+    const float alpha = 0.1f;         // Low-pass filter constant (0 < alpha < 1, smaller = smoother)
+    
     try {
         auto reader = DataReader::FromBuffer(args.CharacteristicValue());
         std::vector<uint8_t> raw_data;
@@ -132,6 +138,29 @@ void HandleNotification(GattCharacteristic        characteristic,
             // Normalize the result
             weightedKal0 /= totalWeight;
             weightedKal1 /= totalWeight;
+
+            // Apply low-pass filter to smooth the movement
+            filteredKal0 = alpha * weightedKal0 + (1 - alpha) * filteredKal0;
+            filteredKal1 = alpha * weightedKal1 + (1 - alpha) * filteredKal1;
+
+            // Calculate the difference between the current and the previous frame
+            float deltaKal0 = std::abs(filteredKal0 - previousKal0);
+            float deltaKal1 = std::abs(filteredKal1 - previousKal1);
+
+            // Movement threshold: Only move if the difference with the previous frame exceeds a certain threshold
+            const float threshold = 5.0f; // Threshold for movement
+            if (deltaKal0 > threshold || deltaKal1 > threshold) {
+                INPUT input = { 0 };
+                input.type = INPUT_MOUSE;
+                input.mi.dx = static_cast<LONG>((filteredKal0 + 1600) * 15);  // Adjust sensitivity
+                input.mi.dy = static_cast<LONG>((-filteredKal1 + 800) * 30);  // Adjust sensitivity
+                input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+                SendInput(1, &input, sizeof(INPUT));
+
+                // Update previous Kal values to the current frame
+                previousKal0 = filteredKal0;
+                previousKal1 = filteredKal1;
+            }
 
             // Move the mouse based on kal values
             INPUT input = {0};
